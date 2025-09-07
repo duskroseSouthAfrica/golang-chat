@@ -44,7 +44,6 @@ func newHub() *Hub {
 	}
 }
 
-// nolint:staticcheck // S1000 is ignored because multiplexing multiple channels is intentional
 func (h *Hub) run() {
 	log.Println("Hub is running")
 	for {
@@ -52,12 +51,14 @@ func (h *Hub) run() {
 		case client := <-h.register:
 			h.clients[client] = true
 			log.Printf("Client %s registered. Total: %d", client.username, len(h.clients))
+			
 		case client := <-h.unregister:
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
 				log.Printf("Client %s unregistered. Total: %d", client.username, len(h.clients))
 			}
+			
 		case message := <-h.broadcast:
 			log.Printf("Broadcasting: %s from %s to %d clients", message.Content, message.Username, len(h.clients))
 			for client := range h.clients {
@@ -86,18 +87,18 @@ func (c *Client) readPump() {
 			log.Printf("Read error: %v", err)
 			break
 		}
-
+		
 		msg.Username = c.username
 		msg.Timestamp = time.Now()
 		log.Printf("Received from %s: %s", c.username, msg.Content)
-
+		
 		c.hub.broadcast <- msg
 	}
 }
 
 func (c *Client) writePump() {
 	defer c.conn.Close()
-
+	
 	for {
 		select {
 		case message, ok := <-c.send:
@@ -105,7 +106,7 @@ func (c *Client) writePump() {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-
+			
 			if err := c.conn.WriteJSON(message); err != nil {
 				log.Printf("Write error: %v", err)
 				return
@@ -142,45 +143,118 @@ func serveWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 func serveHome(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WorkChat Pro</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <title>Simple Chat</title>
     <style>
-    /* ... your full CSS here ... */
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        #messages { height: 400px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-bottom: 20px; background: #fafafa; }
+        .message { margin-bottom: 10px; padding: 8px; background: white; border-radius: 4px; }
+        .username { font-weight: bold; color: #1976d2; }
+        .timestamp { font-size: 0.8em; color: #666; float: right; }
+        .input-group { display: flex; gap: 10px; }
+        input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        #userSetup { margin-bottom: 20px; }
+        .status { padding: 5px 10px; border-radius: 4px; margin-bottom: 10px; text-align: center; }
+        .connected { background: #c8e6c9; color: #2e7d32; }
+        .disconnected { background: #ffcdd2; color: #c62828; }
     </style>
 </head>
 <body>
-    <!-- Login Screen -->
-    <div id="loginOverlay" class="login-overlay">
-        <div class="login-card">
-            <div class="login-logo">
-                <i class="fas fa-comments"></i>
+    <div class="container">
+        <h1>Simple Chat</h1>
+        <div id="status" class="status disconnected">Disconnected</div>
+        
+        <div id="userSetup">
+            <div class="input-group">
+                <input type="text" id="usernameInput" placeholder="Enter username">
+                <button onclick="connect()">Join Chat</button>
             </div>
-            <h1 class="login-title">Welcome to WorkChat Pro</h1>
-            <p class="login-subtitle">Connect and collaborate with your team</p>
-            <div class="login-form">
-                <input type="text" id="usernameInput" class="login-input" placeholder="Enter your name" maxlength="20">
-                <button onclick="connect()" class="login-btn">
-                    <i class="fas fa-sign-in-alt"></i> Join Workspace
-                </button>
+        </div>
+        
+        <div id="chatArea" style="display:none;">
+            <div id="messages"></div>
+            <div class="input-group">
+                <input type="text" id="messageInput" placeholder="Type message...">
+                <button onclick="sendMessage()">Send</button>
             </div>
         </div>
     </div>
 
-    <!-- Main Chat Interface -->
-    <div id="chatContainer" class="chat-container" style="display: none;">
-        <!-- Sidebar and main content... (rest of your HTML) -->
-    </div>
-
     <script>
-    // ... your full JS here ...
+        let ws = null;
+        let username = '';
+
+        function connect() {
+            username = document.getElementById('usernameInput').value.trim();
+            if (!username) {
+                alert('Please enter a username');
+                return;
+            }
+
+            ws = new WebSocket('ws://localhost:8080/ws?username=' + username);
+            
+            ws.onopen = function() {
+                document.getElementById('status').textContent = 'Connected as ' + username;
+                document.getElementById('status').className = 'status connected';
+                document.getElementById('userSetup').style.display = 'none';
+                document.getElementById('chatArea').style.display = 'block';
+            };
+            
+            ws.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                displayMessage(message);
+            };
+            
+            ws.onclose = function() {
+                document.getElementById('status').textContent = 'Disconnected';
+                document.getElementById('status').className = 'status disconnected';
+                document.getElementById('userSetup').style.display = 'block';
+                document.getElementById('chatArea').style.display = 'none';
+            };
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const content = input.value.trim();
+            
+            if (!content || !ws) return;
+            
+            ws.send(JSON.stringify({ content: content }));
+            input.value = '';
+        }
+
+        function displayMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message';
+            
+            const timestamp = new Date(message.timestamp).toLocaleTimeString();
+            messageDiv.innerHTML = 
+                '<span class="timestamp">' + timestamp + '</span>' +
+                '<span class="username">' + message.username + ':</span> ' +
+                message.content;
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Enter to send
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                if (document.getElementById('chatArea').style.display === 'none') {
+                    connect();
+                } else {
+                    sendMessage();
+                }
+            }
+        });
     </script>
 </body>
 </html>`
-
+	
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(html))
 }
